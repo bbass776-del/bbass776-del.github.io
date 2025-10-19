@@ -1,0 +1,230 @@
+{
+  "name": "Email Notification Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-notification",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "email-notification-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Валидация входящих данных\nconst body = $input.first().json;\n\n// Проверяем обязательные поля\nconst requiredFields = ['to', 'subject', 'message'];\nconst missingFields = requiredFields.filter(field => !body[field]);\n\nif (missingFields.length > 0) {\n  throw new Error(`Отсутствуют обязательные поля: ${missingFields.join(', ')}`);\n}\n\n// Валидация email\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nif (!emailRegex.test(body.to)) {\n  throw new Error('Некорректный email адрес');\n}\n\n// Обработка данных\nconst processedData = {\n  to: body.to,\n  subject: body.subject,\n  message: body.message,\n  from: body.from || 'noreply@example.com',\n  priority: body.priority || 'normal',\n  timestamp: new Date().toISOString(),\n  id: `email_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`\n};\n\nreturn [{ json: processedData }];"
+      },
+      "id": "validate-data",
+      "name": "Validate Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "priority-check",
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": "high",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-priority",
+      "name": "Check Priority",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "🚨 URGENT: {{ $json.subject }}",
+        "message": "{{ $json.message }}\\n\\n---\\nЭто сообщение имеет высокий приоритет",
+        "options": {
+          "allowUnauthorizedCerts": false
+        }
+      },
+      "id": "send-high-priority",
+      "name": "Send High Priority Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "{{ $json.subject }}",
+        "message": "{{ $json.message }}",
+        "options": {
+          "allowUnauthorizedCerts": false
+        }
+      },
+      "id": "send-normal-email",
+      "name": "Send Normal Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "table": {
+          "__rl": true,
+          "value": "email_logs",
+          "mode": "list",
+          "cachedResultName": "email_logs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email_id": "={{ $json.id }}",
+            "to_email": "={{ $json.to }}",
+            "from_email": "={{ $json.from }}",
+            "subject": "={{ $json.subject }}",
+            "priority": "={{ $json.priority }}",
+            "sent_at": "={{ $json.timestamp }}",
+            "status": "sent"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "log-email",
+      "name": "Log Email",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"message\": \"Email отправлен успешно\", \"emailId\": $json.id, \"timestamp\": $json.timestamp } }}",
+        "options": {}
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": false, \"error\": $json.error, \"timestamp\": new Date().toISOString() } }}",
+        "responseCode": 400,
+        "options": {}
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 500]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Data": {
+      "main": [
+        [
+          {
+            "node": "Check Priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Priority": {
+      "main": [
+        [
+          {
+            "node": "Send High Priority Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Normal Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send High Priority Email": {
+      "main": [
+        [
+          {
+            "node": "Log Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Normal Email": {
+      "main": [
+        [
+          {
+            "node": "Log Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Email": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["webhook", "email", "notification"],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

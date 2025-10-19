@@ -1,0 +1,292 @@
+{
+  "name": "Weather Data Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "cities",
+              "value": "Moscow,London,New York,Tokyo,Paris"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cities-list",
+      "name": "Cities List",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Разбиваем список городов на отдельные элементы\nconst cities = $input.first().json.cities.split(',').map(city => city.trim());\n\nreturn cities.map(city => ({\n  json: {\n    city: city,\n    timestamp: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "split-cities",
+      "name": "Split Cities",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openweathermap.org/data/2.5/weather",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openWeatherMapApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.city }}"
+            },
+            {
+              "name": "appid",
+              "value": "={{ $credentials.openWeatherMapApi.apiKey }}"
+            },
+            {
+              "name": "units",
+              "value": "metric"
+            },
+            {
+              "name": "lang",
+              "value": "ru"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "get-weather",
+      "name": "Get Weather Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Обработка данных о погоде\nconst weatherData = $input.first().json;\n\n// Извлекаем нужные данные\nconst processedData = {\n  city: weatherData.name,\n  country: weatherData.sys.country,\n  temperature: Math.round(weatherData.main.temp),\n  feels_like: Math.round(weatherData.main.feels_like),\n  humidity: weatherData.main.humidity,\n  pressure: weatherData.main.pressure,\n  description: weatherData.weather[0].description,\n  wind_speed: weatherData.wind.speed,\n  wind_direction: weatherData.wind.deg,\n  visibility: weatherData.visibility / 1000, // в км\n  cloudiness: weatherData.clouds.all,\n  sunrise: new Date(weatherData.sys.sunrise * 1000).toISOString(),\n  sunset: new Date(weatherData.sys.sunset * 1000).toISOString(),\n  timestamp: new Date().toISOString(),\n  data_id: `weather_${weatherData.id}_${Date.now()}`\n};\n\n// Определяем категорию температуры\nif (processedData.temperature > 25) {\n  processedData.temp_category = 'hot';\n} else if (processedData.temperature > 15) {\n  processedData.temp_category = 'warm';\n} else if (processedData.temperature > 5) {\n  processedData.temp_category = 'cool';\n} else {\n  processedData.temp_category = 'cold';\n}\n\nreturn [{ json: processedData }];"
+      },
+      "id": "process-weather",
+      "name": "Process Weather Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "table": {
+          "__rl": true,
+          "value": "weather_data",
+          "mode": "list",
+          "cachedResultName": "weather_data"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "data_id": "={{ $json.data_id }}",
+            "city": "={{ $json.city }}",
+            "country": "={{ $json.country }}",
+            "temperature": "={{ $json.temperature }}",
+            "feels_like": "={{ $json.feels_like }}",
+            "humidity": "={{ $json.humidity }}",
+            "pressure": "={{ $json.pressure }}",
+            "description": "={{ $json.description }}",
+            "wind_speed": "={{ $json.wind_speed }}",
+            "wind_direction": "={{ $json.wind_direction }}",
+            "visibility": "={{ $json.visibility }}",
+            "cloudiness": "={{ $json.cloudiness }}",
+            "sunrise": "={{ $json.sunrise }}",
+            "sunset": "={{ $json.sunset }}",
+            "temp_category": "={{ $json.temp_category }}",
+            "timestamp": "={{ $json.timestamp }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "save-weather",
+      "name": "Save Weather Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "hot-weather",
+              "leftValue": "={{ $json.temp_category }}",
+              "rightValue": "hot",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-hot-weather",
+      "name": "Check Hot Weather",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "weather@example.com",
+        "toEmail": "admin@example.com",
+        "subject": "🌡️ Высокая температура в {{ $json.city }}",
+        "message": "Внимание! В городе {{ $json.city }}, {{ $json.country }} зафиксирована высокая температура: {{ $json.temperature }}°C\\n\\nДополнительная информация:\\n- Ощущается как: {{ $json.feels_like }}°C\\n- Влажность: {{ $json.humidity }}%\\n- Описание: {{ $json.description }}\\n- Время: {{ $json.timestamp }}",
+        "options": {
+          "allowUnauthorizedCerts": false
+        }
+      },
+      "id": "send-hot-weather-alert",
+      "name": "Send Hot Weather Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1780, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"text\": `🌡️ Погодные данные обновлены для ${$json.city}, ${$json.country}: ${$json.temperature}°C (${$json.description})` }}",
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "slack-notification",
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 400]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Cities List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cities List": {
+      "main": [
+        [
+          {
+            "node": "Split Cities",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Cities": {
+      "main": [
+        [
+          {
+            "node": "Get Weather Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Weather Data": {
+      "main": [
+        [
+          {
+            "node": "Process Weather Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Weather Data": {
+      "main": [
+        [
+          {
+            "node": "Save Weather Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Weather Data": {
+      "main": [
+        [
+          {
+            "node": "Check Hot Weather",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Hot Weather": {
+      "main": [
+        [
+          {
+            "node": "Send Hot Weather Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["weather", "api", "scheduled", "data-processing"],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

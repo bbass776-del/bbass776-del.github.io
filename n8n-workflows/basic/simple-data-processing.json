@@ -1,0 +1,209 @@
+{
+  "name": "Simple Data Processing",
+  "nodes": [
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "name",
+              "value": "John Doe"
+            },
+            {
+              "name": "email", 
+              "value": "john@example.com"
+            },
+            {
+              "name": "age",
+              "value": "30"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "start-node",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Простая обработка данных\nconst items = $input.all();\nconst processedItems = [];\n\nfor (const item of items) {\n  const data = item.json;\n  \n  // Добавляем обработанные данные\n  processedItems.push({\n    json: {\n      fullName: data.name,\n      email: data.email.toLowerCase(),\n      age: parseInt(data.age),\n      isAdult: parseInt(data.age) >= 18,\n      processedAt: new Date().toISOString()\n    }\n  });\n}\n\nreturn processedItems;"
+      },
+      "id": "process-data",
+      "name": "Process Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "adult-check",
+              "leftValue": "={{ $json.isAdult }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-adult",
+      "name": "Check if Adult",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "Пользователь совершеннолетний: {{ $json.fullName }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "adult-message",
+      "name": "Adult Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "message",
+              "value": "Пользователь несовершеннолетний: {{ $json.fullName }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "minor-message",
+      "name": "Minor Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "table": {
+          "__rl": true,
+          "value": "processed_users",
+          "mode": "list",
+          "cachedResultName": "processed_users"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fullName": "={{ $json.fullName }}",
+            "email": "={{ $json.email }}",
+            "age": "={{ $json.age }}",
+            "isAdult": "={{ $json.isAdult }}",
+            "processedAt": "={{ $json.processedAt }}",
+            "message": "={{ $json.message }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "save-to-db",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Process Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Data": {
+      "main": [
+        [
+          {
+            "node": "Check if Adult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Adult": {
+      "main": [
+        [
+          {
+            "node": "Adult Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Minor Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adult Message": {
+      "main": [
+        [
+          {
+            "node": "Save to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Minor Message": {
+      "main": [
+        [
+          {
+            "node": "Save to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

@@ -1,0 +1,209 @@
+{
+  "name": "CSV to Database Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "/data/input/sales_data.csv",
+        "options": {
+          "delimiter": ",",
+          "headerRow": true,
+          "encoding": "utf8"
+        }
+      },
+      "id": "read-csv",
+      "name": "Read CSV File",
+      "type": "n8n-nodes-base.readFile",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Парсинг CSV данных\nconst csvContent = $input.first().binary.data.data;\nconst csvText = Buffer.from(csvContent, 'base64').toString('utf8');\n\n// Разбиваем на строки\nconst lines = csvText.split('\\n').filter(line => line.trim());\nconst headers = lines[0].split(',').map(h => h.trim());\n\n// Обрабатываем каждую строку данных\nconst processedData = [];\nfor (let i = 1; i < lines.length; i++) {\n  const values = lines[i].split(',').map(v => v.trim());\n  \n  if (values.length === headers.length) {\n    const row = {};\n    headers.forEach((header, index) => {\n      let value = values[index];\n      \n      // Очищаем кавычки если есть\n      if (value.startsWith('\"') && value.endsWith('\"')) {\n        value = value.slice(1, -1);\n      }\n      \n      // Преобразуем числовые значения\n      if (header.includes('price') || header.includes('amount') || header.includes('quantity')) {\n        value = parseFloat(value) || 0;\n      } else if (header.includes('date')) {\n        // Пытаемся распарсить дату\n        const date = new Date(value);\n        value = isNaN(date.getTime()) ? value : date.toISOString();\n      }\n      \n      row[header] = value;\n    });\n    \n    // Добавляем метаданные\n    row.processed_at = new Date().toISOString();\n    row.row_number = i;\n    row.data_id = `csv_${Date.now()}_${i}`;\n    \n    processedData.push({ json: row });\n  }\n}\n\nreturn processedData;"
+      },
+      "id": "parse-csv",
+      "name": "Parse CSV Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Валидация и очистка данных\nconst items = $input.all();\nconst validatedItems = [];\nconst errors = [];\n\nfor (const item of items) {\n  const data = item.json;\n  const errors_for_item = [];\n  \n  // Проверяем обязательные поля\n  const requiredFields = ['customer_name', 'product', 'price', 'quantity', 'date'];\n  requiredFields.forEach(field => {\n    if (!data[field] || data[field] === '') {\n      errors_for_item.push(`Отсутствует обязательное поле: ${field}`);\n    }\n  });\n  \n  // Валидация цены\n  if (data.price && (isNaN(data.price) || data.price < 0)) {\n    errors_for_item.push('Некорректная цена');\n  }\n  \n  // Валидация количества\n  if (data.quantity && (isNaN(data.quantity) || data.quantity < 0)) {\n    errors_for_item.push('Некорректное количество');\n  }\n  \n  // Валидация email если есть\n  if (data.email) {\n    const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n    if (!emailRegex.test(data.email)) {\n      errors_for_item.push('Некорректный email');\n    }\n  }\n  \n  if (errors_for_item.length === 0) {\n    // Вычисляем общую сумму\n    data.total_amount = (data.price || 0) * (data.quantity || 0);\n    \n    // Определяем категорию заказа\n    if (data.total_amount > 1000) {\n      data.order_category = 'large';\n    } else if (data.total_amount > 100) {\n      data.order_category = 'medium';\n    } else {\n      data.order_category = 'small';\n    }\n    \n    validatedItems.push({ json: data });\n  } else {\n    errors.push({\n      row: data.row_number,\n      data_id: data.data_id,\n      errors: errors_for_item\n    });\n  }\n}\n\n// Если есть ошибки, сохраняем их\nif (errors.length > 0) {\n  // Здесь можно отправить ошибки в отдельную таблицу или файл\n  console.log('Найдены ошибки валидации:', errors);\n}\n\nreturn validatedItems;"
+      },
+      "id": "validate-data",
+      "name": "Validate Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "table": {
+          "__rl": true,
+          "value": "sales_data",
+          "mode": "list",
+          "cachedResultName": "sales_data"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "data_id": "={{ $json.data_id }}",
+            "customer_name": "={{ $json.customer_name }}",
+            "email": "={{ $json.email || null }}",
+            "product": "={{ $json.product }}",
+            "price": "={{ $json.price }}",
+            "quantity": "={{ $json.quantity }}",
+            "total_amount": "={{ $json.total_amount }}",
+            "order_category": "={{ $json.order_category }}",
+            "date": "={{ $json.date }}",
+            "processed_at": "={{ $json.processed_at }}",
+            "row_number": "={{ $json.row_number }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "save-to-database",
+      "name": "Save to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Генерация отчета\nconst items = $input.all();\n\nif (items.length === 0) {\n  return [{ json: { message: 'Нет данных для обработки' } }];\n}\n\n// Статистика\nconst stats = {\n  total_records: items.length,\n  total_amount: items.reduce((sum, item) => sum + (item.json.total_amount || 0), 0),\n  average_order: 0,\n  categories: {},\n  top_products: {},\n  processing_time: new Date().toISOString()\n};\n\n// Вычисляем средний чек\nstats.average_order = stats.total_amount / stats.total_records;\n\n// Подсчитываем категории заказов\nitems.forEach(item => {\n  const category = item.json.order_category;\n  stats.categories[category] = (stats.categories[category] || 0) + 1;\n  \n  const product = item.json.product;\n  stats.top_products[product] = (stats.top_products[product] || 0) + 1;\n});\n\n// Топ-5 продуктов\nconst topProducts = Object.entries(stats.top_products)\n  .sort(([,a], [,b]) => b - a)\n  .slice(0, 5)\n  .map(([product, count]) => ({ product, count }));\n\nstats.top_products = topProducts;\n\nreturn [{ json: stats }];"
+      },
+      "id": "generate-report",
+      "name": "Generate Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "table": {
+          "__rl": true,
+          "value": "processing_reports",
+          "mode": "list",
+          "cachedResultName": "processing_reports"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "report_id": "={{ `report_${Date.now()}` }}",
+            "total_records": "={{ $json.total_records }}",
+            "total_amount": "={{ $json.total_amount }}",
+            "average_order": "={{ $json.average_order }}",
+            "categories": "={{ JSON.stringify($json.categories) }}",
+            "top_products": "={{ JSON.stringify($json.top_products) }}",
+            "processing_time": "={{ $json.processing_time }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "save-report",
+      "name": "Save Report",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "reports@example.com",
+        "toEmail": "admin@example.com",
+        "subject": "📊 Отчет об обработке данных CSV",
+        "message": "Обработка CSV файла завершена успешно!\\n\\nСтатистика:\\n- Обработано записей: {{ $json.total_records }}\\n- Общая сумма: {{ $json.total_amount.toFixed(2) }} руб.\\n- Средний чек: {{ $json.average_order.toFixed(2) }} руб.\\n\\nКатегории заказов:\\n{{ Object.entries($json.categories).map(([cat, count]) => `- ${cat}: ${count}`).join('\\n') }}\\n\\nТоп-5 продуктов:\\n{{ $json.top_products.map(p => `- ${p.product}: ${p.count}`).join('\\n') }}\\n\\nВремя обработки: {{ $json.processing_time }}",
+        "options": {
+          "allowUnauthorizedCerts": false
+        }
+      },
+      "id": "send-report-email",
+      "name": "Send Report Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Read CSV File": {
+      "main": [
+        [
+          {
+            "node": "Parse CSV Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse CSV Data": {
+      "main": [
+        [
+          {
+            "node": "Validate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Data": {
+      "main": [
+        [
+          {
+            "node": "Save to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Database": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Save Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["csv", "data-processing", "database", "validation"],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
